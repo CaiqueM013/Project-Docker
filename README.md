@@ -1,4 +1,4 @@
-DevSecOps
+## DevSecOps
 
 ##  Configuração da VPC 
 
@@ -49,19 +49,6 @@ DevSecOps
     - Porta Range: 3306
     - Source Type: Custom
     - Source:  SG Instâncias
-
-### SG do Load Balancer
-
-- **Inbound Rules :**
-    - Type: HTTP
-    - Porta Range: 80
-    - Source Type: Anywhere-IPv4
-    - Source:  0.0.0.0/0
-    
-    - **Type: HTTPS**
-    - Porta Range: 443
-    - Source Type: Anywhere-IPv4
-    - Source:  0.0.0.0/0
 
 ###  SG do Elastic File System
 
