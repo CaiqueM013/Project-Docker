@@ -181,28 +181,7 @@ services:
       - /mnt/efs/wordpress:/var/www/html
 EOF
 
-sudo tee /etc/systemd/system/docker-compose.service > /dev/null <<EOF
-[Unit]
-Description=Docker Compose Application
-Requires=docker.service
-After=docker.service
-
-[Service]
-WorkingDirectory=/mnt/efs/
-ExecStart=/usr/local/bin/docker-compose -f /mnt/efs/docker-compose.yaml up -d
-ExecStop=/usr/local/bin/docker-compose -f /mnt/efs/docker-compose.yaml down
-Restart=always
-User=ec2-user
-
-[Install]
-WantedBy=multi-user.target
-EOF 
-
-sudo systemctl daemon-reload
-sudo systemctl enable docker-compose
-sudo systemctl start docker-compose
-
-sleep 30
+docker-compose -f /mnt/efs/docker-compose.yaml up -d
 
 docker exec $(docker ps -q -f "ancestor=wordpress:latest") bash -c 'echo "<?php http_response_code(200); ?>" > /var/www/html/healthcheck.php'
 ```
@@ -230,8 +209,8 @@ docker exec $(docker ps -q -f "ancestor=wordpress:latest") bash -c 'echo "<?php 
 - Criar um Alarme no CloudWatch
 - Acesse o AWS CloudWatch.
 - Vá para Alarms > Create Alarm.
-- Escolha a métrica Application Load Balancer > Per-Target Metrics.
-- Selecione RequestCountPerTarget e escolha o Target Group correto.
+- Escolha a métrica Application Load Balancer > by-service.
+- Selecione RequestCount e escolha o Target Group correto.
 - Configure a condição:
 - Threshold Type: Static
 - Quando a média for maior que: 200 requisições por minuto
@@ -257,8 +236,8 @@ docker exec $(docker ps -q -f "ancestor=wordpress:latest") bash -c 'echo "<?php 
 - Criar um Alarme no CloudWatch
 - Acesse o AWS CloudWatch.
 - Vá para Alarms > Create Alarm.
-- Escolha a métrica Application Load Balancer > Per-Target Metrics.
-- Selecione RequestCountPerTarget e escolha o Target Group correto.
+- Escolha a métrica Application Load Balancer > by-service.
+- Selecione RequestCount e escolha o Target Group correto.
 - Configure a condição:
 - Threshold Type: Static
 - Quando a média for menor que: 10 requisições por minuto
