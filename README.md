@@ -40,6 +40,11 @@
     - Porta Range: 443
     - Source Type: Custom
     - Source:  SG Load Balancer
+
+    - Type: SSH
+    - Porta Range: 22
+    - Source Type: Anywhere-IPv4
+    - Source:  0.0.0.0/0
     
 
 ### SG do Banco de Dados
@@ -57,6 +62,24 @@
     - Porta Range: 2049
     - Source Type: Custom
     - Source:  Security Group das Instâncias
+
+## Criação e acesso ao Bastion Host
+### Para acessarmos as instâncias privadas via SSH, podemos configurar um Bastion Host em uma sub-rede pública.
+
+ - Crie uma instância EC2, com uma nova chave .pem e sem um script user_data.
+ - Acesse o CMD do Windows e navegue até a pasta onde estão armazenadas as chaves .pem.
+ - Digite o comando "type" e o nome de uma das key pairs da EC2 privada que deseja se conectar.
+ - Copie o conteúdo da key pair.
+ - No painel de instâncias na AWS, selecione sua instância Bastion Host e clique em "Connect".
+ - Na categoria "SSH Client" copie o último comando -> "Example";
+ - Cole o comando e rode em seu CMD, escreva "yes" e permita a conexão SSH;
+ - Após a conexão bem-sucedida, crie um novo arquivo .pem digitando o comando "nano exemplo-nome-chave-ec2-privada-1.pem".
+ - Dentro do nano, cole o conteúdo de sua key pair anteriormente copiada, salve-o e saia do nano.
+ - Dê permissão para o arquivo digitando o comando "chmod 400 nome-chave-ec2-privada-1.pem".
+ - No painel de instâncias na AWS, selecione sua instância privada e clique em "Connect".
+ - Na categoria "SSH Client" copie o último comando -> "Example";
+ - Cole o comando, mude o nome da chave para "nome-chave-ec2-privada-1.pem".
+
 
 ## Configuração do Elastic File System (EFS)
 
@@ -118,45 +141,83 @@
 - Escolha o Security Group da instâncias
 
 ```bash
-#!/usr/bin/env bash
+#!/bin/bash
 
+# Atualiza o sistema e instala Docker
 sudo yum update -y
-sudo yum upgrade -y
-sudo yum install -y amazon-efs-utils
-
-mkdir -p /mnt/efs
-sudo mount -t efs -o tls "*<EFS_DNS>*":/ /mnt/efs
-
-sudo yum install docker -y
+sudo yum install -y docker
+sudo systemctl start docker
+sudo systemctl enable docker
 sudo usermod -a -G docker ec2-user
-newgrp docker
-sudo systemctl enable docker.service
-sudo systemctl start docker.service
 
-sudo curl -L [https://github.com/docker/compose/releases/latest/download/docker-compose-$](https://github.com/docker/compose/releases/latest/download/docker-compose-$)(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+# Instala o Docker Compose
+sudo curl -L "https://github.com/docker/compose/releases/download/1.27.4/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
 sudo chmod +x /usr/local/bin/docker-compose
 
-cat << EOF > /home/ec2-user/docker-compose.yml
+# Instala e configura o Amazon EFS
+sudo yum install -y amazon-efs-utils
+sudo systemctl start amazon-efs-utils
+sudo systemctl enable amazon-efs-utils
+
+# Cria o diretório para o EFS e monta
+sudo mkdir -p /mnt/efs
+echo ""*<EFS_DNS>*":/ /mnt/efs nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev 0 0" | sudo tee -a /etc/fstab
+sudo mount -a
+
+# Cria o diretório do WordPress
+sudo mkdir -p /mnt/efs/wordpress
+sudo chown -R ec2-user:ec2-user /mnt/efs/wordpress
+sudo chmod -R 775 /mnt/efs/wordpress
+
+# Cria o arquivo docker-compose.yaml
+sudo tee /mnt/efs/docker-compose.yaml > /dev/null <<EOF
+version: '3.8'
 services:
-wordpress:
-image: wordpress:latest
-ports:
-- "80:80"
-environment:
-WORDPRESS_DB_HOST: "*<RDS_ENDPOINT>*"
-WORDPRESS_DB_USER: "*<USER>*"
-WORDPRESS_DB_PASSWORD: "*<SENHA>*"
-WORDPRESS_DB_NAME: "*<NOME_DB>*"
-volumes:
-- /mnt/efs/wp-content:/var/www/html/wp-content
-restart: always
+  wordpress:
+    image: wordpress:latest
+    restart: always
+    ports:
+      - 80:80
+    environment:
+      WORDPRESS_DB_HOST: "*<RDS_ENDPOINT>*"
+      WORDPRESS_DB_NAME: "*<NOME_DB>*"
+      WORDPRESS_DB_USER: "*<USER>*"
+      WORDPRESS_DB_PASSWORD: "*<SENHA>*"
+    volumes:
+      - /mnt/efs/wordpress:/var/www/html
 EOF
 
-cd /home/ec2-user
-docker-compose up -d
+# Cria o serviço systemd para gerenciar o Docker Compose
+sudo tee /etc/systemd/system/docker-compose.service > /dev/null <<EOF
+[Unit]
+Description=Docker Compose Application
+Requires=docker.service
+After=docker.service
+
+[Service]
+WorkingDirectory=/mnt/efs/
+ExecStart=/usr/local/bin/docker-compose -f /mnt/efs/docker-compose.yaml up -d
+ExecStop=/usr/local/bin/docker-compose -f /mnt/efs/docker-compose.yaml down
+Restart=always
+User=ec2-user
+
+[Install]
+WantedBy=multi-user.target
+EOF 
+
+# Recarrega o systemd e ativa o serviço
+sudo systemctl daemon-reload
+sudo systemctl enable docker-compose
+sudo systemctl start docker-compose
+
+# Aguarda o WordPress iniciar
+sleep 30
+
+# Cria a página de Health Check
+docker exec $(docker ps -q -f "ancestor=wordpress:latest") bash -c 'echo "<?php http_response_code(200); ?>" > /var/www/html/healthcheck.php'
 ```
 
-### Criando o Auto Scaling Group
+## Criando o Auto Scaling Group
 
 - Volte para a página do Auto Scaling Group e selecione a instância criada
 - Clique em NEXT
@@ -171,3 +232,59 @@ docker-compose up -d
 - Min desired capacity: 1
 - Max desired capacity: 2
 - Clique em NEXT até chegar em CREATE AUTO SCALING GROUP
+
+## Regras de Auto Scaling
+
+### Criar Política de Escala para Aumentar a Capacidade
+
+- Criar um Alarme no CloudWatch
+- Acesse o AWS CloudWatch.
+- Vá para Alarms > Create Alarm.
+- Escolha a métrica Application Load Balancer > Per-Target Metrics.
+- Selecione RequestCountPerTarget e escolha o Target Group correto.
+- Configure a condição:
+- Threshold Type: Static
+- Quando a média for maior que: 200 requisições por minuto
+- Duração: 2 períodos de 1 minuto
+- Clique em Next.
+- Escolha a ação Auto Scaling Action e selecione o ASG.
+- Selecione Adicionar 1 instância e finalize o alarme.
+
+#### Passo 2: Criar a Política de Escala no Auto Scaling Group
+
+- Acesse o EC2 > Auto Scaling Groups.
+- Escolha o seu Auto Scaling Group.
+- Vá para a aba Automatic Scaling.
+- Clique em Create Scaling Policy.
+- Escolha Step Scaling e associe ao alarme criado.
+- Configure a ação:
+- Incrementar 1 instância.
+- Cooldown: 120 segundos.
+- Salve a política.
+
+### Criar Política de Escala para Reduzir a Capacidade
+
+- Criar um Alarme no CloudWatch
+- Acesse o AWS CloudWatch.
+- Vá para Alarms > Create Alarm.
+- Escolha a métrica Application Load Balancer > Per-Target Metrics.
+- Selecione RequestCountPerTarget e escolha o Target Group correto.
+- Configure a condição:
+- Threshold Type: Static
+- Quando a média for menor que: 10 requisições por minuto
+- Duração: 5 períodos de 1 minuto
+- Clique em Next.
+- Escolha a ação Auto Scaling Action e selecione o ASG.
+- Selecione Remover 1 instância e finalize o alarme.
+
+#### Passo 2: Criar a Política de Escala no Auto Scaling Group
+
+- Acesse o EC2 > Auto Scaling Groups.
+- Escolha o seu Auto Scaling Group.
+- Vá para a aba Automatic Scaling.
+- Clique em Create Scaling Policy.
+- Escolha Step Scaling e associe ao alarme criado.
+- Configure a ação:
+- Remover 1 instância.
+- Cooldown: 300 segundos.
+- Salve a política.
